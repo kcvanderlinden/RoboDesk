@@ -30,19 +30,19 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
 //-- Buffered mode parses input words and sends them to output separately
-void ICACHE_RAM_ATTR logicDataPin_ISR() {
+void IRAM_ATTR logicDataPin_ISR() {
   ld.PinChange(HIGH == digitalRead(LOGICDATA_RX));
 }
 
-uint8_t highTarget = 41;
-uint8_t lowTarget = 28;
+uint8_t highTarget = 110;
+uint8_t lowTarget = 80;
 uint8_t maxHeight = 128;
 uint8_t minHeight = 62;
 bool setheight = false;
 bool active = false;
 
-uint8_t height;
-uint8_t target;
+uint8_t currentHeight;
+uint8_t targetHeight;
 
 template <class T>
 char * convertToChar (T value) {
@@ -96,7 +96,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
   if ((String) topic == MQTT_TOPIC + "set") {
     int height_in = convertToInt((char* )message, length);
     if (isValidHeight(height_in)) {
-      target = height_in;
+      targetHeight = height_in;
       setheight = true;
     } else {
       char buffer[40];
@@ -106,7 +106,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     
     Serial.println("------");
     Serial.print("Current height: ");
-    Serial.println(height);
+    Serial.println(currentHeight);
   }
 }
 
@@ -168,7 +168,7 @@ void setup() {
 }
 
 // Record last time the display changed
-// sets globals height and last_signal
+// sets globals currentHeight and last_signal
 void check_display() {
   static uint32_t prev = 0;
   uint32_t msg = ld.ReadTrace();
@@ -183,10 +183,10 @@ void check_display() {
   // Reset idle-activity timer if display number changes or if any other display activity occurs (i.e. display-ON)
   if (ld.IsNumber(msg)) {
     auto new_height = ld.GetNumber(msg);
-    if (new_height == height) {
+    if (new_height == currentHeight) {
       return;
     }
-    height = new_height;
+    currentHeight = new_height;
   }
   if (msg)
     last_signal = millis();
@@ -209,22 +209,22 @@ void transitionState(enum Actions action) {
       break;
     case UpDouble:
       latch_up = true;
-      target = highTarget;
+      targetHeight = highTarget;
       Serial.print("Latching UP ");
-      Serial.println(target);
+      Serial.println(targetHeight);
       break;
     case DownDouble:
       latch_down = true;
-      target = lowTarget;
+      targetHeight = lowTarget;
       Serial.print("Latching Down ");
-      Serial.println(target);
+      Serial.println(targetHeight);
       break;
   }
 }
 
 void move_table_up() {
-  // height is initially 0 before the first move
-  if (height == 0 || isValidHeight(height)) {
+  // currentHeight is initially 0 before the first move
+  if (currentHeight == 0 || isValidHeight(currentHeight)) {
     digitalWrite(ASSERT_UP, HIGH);
     if (active == false) {
       active = true;
@@ -236,8 +236,8 @@ void move_table_up() {
 }
 
 void move_table_down() {
-  // height is initially 0 before the first move
-  if (height == 0 || isValidHeight(height)) {
+  // currentHeight is initially 0 before the first move
+  if (currentHeight == 0 || isValidHeight(currentHeight)) {
     digitalWrite(ASSERT_DOWN, HIGH);
     if (active == false) {
       active = true;
@@ -248,7 +248,7 @@ void move_table_down() {
   }
 }
 
-void move() {
+void move_table() {
   //btn_last_state has current buttons pressed
   if(btn_last_state[0] && btn_last_state[1]) {
     //both buttons pressed, do nothing
@@ -274,6 +274,7 @@ void move() {
     Serial.println("Latch up and latch down set, this is an issue");
     while(true) ;
   }
+
   if((millis() - last_signal > signal_giveup_time) && !setheight) {
     Serial.println("Haven't seen input in a while, turning everything off for safety");
     digitalWrite(ASSERT_UP, LOW);
@@ -283,30 +284,46 @@ void move() {
     while(true) ;
   }
 
-  if(height != target) {
+  if(currentHeight != targetHeight) {
     if (latch_up || latch_down) {
       //should be moving
       latch_up ? move_table_up() : move_table_down();
       digitalWrite(!latch_up ? ASSERT_UP : ASSERT_DOWN, LOW);
       return;
     } else if (setheight) {
-      if (height > target)
+      if (currentHeight > targetHeight)
         move_table_down();
       else
         move_table_up();
       return;
     }
   } else {
-    //hit target
+    //hit targetHeight
     digitalWrite(ASSERT_UP, LOW);
     digitalWrite(ASSERT_DOWN, LOW);
     latch_up = false;
     latch_down = false;
     setheight = false;
-    Serial.print("Hit target ");
-    Serial.println(target);
+    Serial.print("Hit targetHeight ");
+    Serial.println(targetHeight);
     return;
   }
+}
+
+void initMQTT()
+{
+  if (!mqttClient.connected()) {
+      while (!mqttClient.connected()) {
+          if (mqttClient.connect("ESP8266Client", MQTT_USER, MQTT_PASS)) {
+            mqttClient.subscribe((MQTT_TOPIC + "set").c_str());
+            mqttClient.subscribe((MQTT_TOPIC + "cmd").c_str());
+
+            mqttClient.publish((MQTT_TOPIC + "state").c_str(), "connected");
+          }
+          delay(100);
+      }
+  } else
+    mqttClient.loop();
 }
 
 long lastPublish = 0;
@@ -314,28 +331,20 @@ byte lastHeight = 0;
 
 void publishHeight() {
     long now = millis();
-    if (lastHeight != height && now - lastPublish > 5000)
+    if (lastHeight != currentHeight && now - lastPublish > 5000)
     {
         lastPublish = now;
-        lastHeight = height;
-        mqttClient.publish((MQTT_TOPIC + "height").c_str(), convertToChar(height));
+        lastHeight = currentHeight;
+        mqttClient.publish((MQTT_TOPIC + "height").c_str(), convertToChar(currentHeight));
     }
 }
 
 void loop() {
-  // sets global height and last_signal from logicdata serial
+  // sets global currentHeight and last_signal from logicdata serial
   check_display();
 
   ArduinoOTA.handle();
-  if (!mqttClient.connected()) {
-      while (!mqttClient.connected()) {
-          mqttClient.connect("ESP8266Client", MQTT_USER, MQTT_PASS);
-          delay(100);
-      }
-  } else {
-    mqttClient.publish((MQTT_TOPIC + "state").c_str(), "connected");
-  }
-  mqttClient.loop();
+  initMQTT();
 
   if (!setheight) {
     for(uint8_t i=0; i < ARRAY_SIZE(btn_pins); ++i) {
@@ -365,6 +374,7 @@ void loop() {
       }
     }
   }
-  move();
+
+  move_table();
   publishHeight();
 }
