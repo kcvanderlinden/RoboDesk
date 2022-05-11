@@ -1,6 +1,8 @@
-#include "pins.h"
-#include "LogicData.h"
-
+#include <pins.h>
+#include <LogicData.h>
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <Credentials.h> // rename Credential.h.example and adjust variables
 
 #define ARRAY_SIZE(array) (sizeof(array) / sizeof(array[0]))
 
@@ -23,6 +25,8 @@ uint32_t signal_giveup_time = 2000;
 
 
 LogicData ld(-1);
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
 //-- Buffered mode parses input words and sends them to output separately
 void ICACHE_RAM_ATTR logicDataPin_ISR() {
@@ -35,6 +39,37 @@ uint8_t lowTarget = 28;
 uint8_t height;
 uint8_t target;
 
+void setup_wifi() {
+    WiFi.mode(WIFI_STA);
+    WiFi.persistent(false);
+    #ifdef WIFICONFIG_H
+      WiFi.config(WIFI_IP, WIFI_DNS, WIFI_GATEWAY, WIFI_SUBNET);
+    #endif
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(WIFI_SSID, WIFI_PSK);
+ 
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(100);
+    }
+
+    Serial.println("---------");
+    Serial.print("Wifi connected with IP: ");
+    Serial.println(WiFi.localIP());
+}
+
+void mqttCallback(char* topic, byte* message, unsigned int length) {
+  Serial.print("Message arrived on topic: ");
+  Serial.print(topic);
+  Serial.print(". Message: ");
+  String messageTemp;
+  
+  for (unsigned int i = 0; i < length; i++) {
+    Serial.print((char)message[i]);
+    messageTemp += (char)message[i];
+  }
+  Serial.println();
+}
+
 void setup() {
 
   pinMode(BTN_UP, INPUT);
@@ -45,6 +80,10 @@ void setup() {
   pinMode(ASSERT_DOWN, OUTPUT);
 
   Serial.begin(115200);
+
+  setup_wifi();
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
 
   logicDataPin_ISR();
   attachInterrupt(digitalPinToInterrupt(LOGICDATA_RX), logicDataPin_ISR, CHANGE);
@@ -161,6 +200,16 @@ void loop() {
   // sets global height and last_signal from logicdata serial
   check_display();
 
+  if (!mqttClient.connected()) {
+      while (!mqttClient.connected()) {
+          mqttClient.connect("ESP8266Client", MQTT_USER, MQTT_PASS);
+          delay(100);
+      }
+  } else {
+    mqttClient.publish((MQTT_TOPIC + "state").c_str(), "connected");
+  }
+  mqttClient.loop();
+
   for(uint8_t i=0; i < ARRAY_SIZE(btn_pins); ++i) {
     int btn_state = digitalRead(btn_pins[i]);
     if((btn_state == btn_pressed_state) != btn_last_state[i] && millis() - debounce[i] > debounce_time) {
@@ -174,12 +223,14 @@ void loop() {
           //double press
           Serial.print("double press ");
           Serial.println(i == 0 ? "up" : "down");
+          mqttClient.publish((MQTT_TOPIC + "button").c_str(), i == 0 ? "double up" : "double down");
           transitionState(i == 0 ? UpDouble : DownDouble);
         } else {
           btn_last_on[i] = debounce[i];
           //single press
           Serial.print("single press ");
           Serial.println(i == 0 ? "up" : "down");
+          mqttClient.publish((MQTT_TOPIC + "button").c_str(), i == 0 ? "single up" : "single down");
           transitionState(i == 0 ? UpSingle : DownSingle);
         }
       }// endif pressed
