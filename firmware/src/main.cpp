@@ -35,9 +35,32 @@ void ICACHE_RAM_ATTR logicDataPin_ISR() {
 
 uint8_t highTarget = 41;
 uint8_t lowTarget = 28;
+uint8_t maxHeight = 128;
+uint8_t minHeight = 62;
+bool setheight = false;
+bool active = false;
 
 uint8_t height;
 uint8_t target;
+
+template <class T>
+char * convertToChar (T value) {
+    String valueString = String(value);
+    char * output = new char[valueString.length() +1];
+    strcpy(output,valueString.c_str());
+    return output;
+}
+int convertToInt (char* value, int length) {
+  value[length] = '\0';
+  return atoi(value);
+}
+
+bool isValidHeight(int checkHeight) {
+  if (checkHeight >= minHeight && checkHeight <= maxHeight)
+    return true;
+  else
+    return false;
+}
 
 void setup_wifi() {
     WiFi.mode(WIFI_STA);
@@ -68,6 +91,22 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     messageTemp += (char)message[i];
   }
   Serial.println();
+
+  if ((String) topic == MQTT_TOPIC + "set") {
+    int height_in = convertToInt((char* )message, length);
+    if (isValidHeight(height_in)) {
+      target = height_in;
+      setheight = true;
+    } else {
+      char buffer[40];
+      sprintf(buffer, "Invalid height! [min: %d, max: %d]", minHeight, maxHeight);
+      Serial.println(buffer);
+    }
+    
+    Serial.println("------");
+    Serial.print("Current height: ");
+    Serial.println(height);
+  }
 }
 
 void setup() {
@@ -90,7 +129,7 @@ void setup() {
 
   ld.Begin();
 
-  Serial.println("Robodesk v2.x  build: " __DATE__ " " __TIME__);
+  Serial.println("Robodesk v2.5  build: " __DATE__ " " __TIME__);
 }
 
 // Record last time the display changed
@@ -117,6 +156,7 @@ void check_display() {
   if (msg)
     last_signal = millis();
 }
+
 
 enum Actions { UpSingle, UpDouble, DownSingle, DownDouble };
 bool latch_up = false;
@@ -147,21 +187,51 @@ void transitionState(enum Actions action) {
   }
 }
 
+void move_table_up() {
+  // height is initially 0 before the first move
+  if (height == 0 || isValidHeight(height)) {
+    digitalWrite(ASSERT_UP, HIGH);
+    if (active == false) {
+      active = true;
+      mqttClient.publish((MQTT_TOPIC + "active").c_str(), "true");
+    }
+    mqttClient.publish((MQTT_TOPIC + "direction").c_str(), "up");
+    digitalWrite(ASSERT_DOWN, LOW);
+  }
+}
+
+void move_table_down() {
+  // height is initially 0 before the first move
+  if (height == 0 || isValidHeight(height)) {
+    digitalWrite(ASSERT_DOWN, HIGH);
+    if (active == false) {
+      active = true;
+      mqttClient.publish((MQTT_TOPIC + "active").c_str(), "true");
+    }
+    mqttClient.publish((MQTT_TOPIC + "direction").c_str(), "down");
+    digitalWrite(ASSERT_UP, LOW);
+  }
+}
+
 void move() {
   //btn_last_state has current buttons pressed
   if(btn_last_state[0] && btn_last_state[1]) {
     //both buttons pressed, do nothing
-    //do nothing
+    Serial.println("Both buttons pressed");
   } else if(btn_last_state[0]) {
-    digitalWrite(ASSERT_UP, HIGH);
+    move_table_up();
     return;
   } else if(btn_last_state[1]) {
-    digitalWrite(ASSERT_DOWN, HIGH);
+    move_table_down();
     return;
-  } else if (!latch_up && !latch_down) {
+  } else if (!latch_up && !latch_down && !setheight) {
     //if not latch, do nothing
     digitalWrite(ASSERT_UP, LOW);
     digitalWrite(ASSERT_DOWN, LOW);
+    if (active == true) {
+      mqttClient.publish((MQTT_TOPIC + "active").c_str(), "false");
+      active = false;
+    }
     return;
   }
 
@@ -169,7 +239,7 @@ void move() {
     Serial.println("Latch up and latch down set, this is an issue");
     while(true) ;
   }
-  if(millis() - last_signal > signal_giveup_time) {
+  if((millis() - last_signal > signal_giveup_time) && !setheight) {
     Serial.println("Haven't seen input in a while, turning everything off for safety");
     digitalWrite(ASSERT_UP, LOW);
     digitalWrite(ASSERT_DOWN, LOW);
@@ -179,22 +249,43 @@ void move() {
   }
 
   if(height != target) {
-    //should be moving
-    digitalWrite(latch_up ? ASSERT_UP : ASSERT_DOWN, HIGH);
-    digitalWrite(!latch_up ? ASSERT_UP : ASSERT_DOWN, LOW);
-    return;
+    if (latch_up || latch_down) {
+      //should be moving
+      latch_up ? move_table_up() : move_table_down();
+      digitalWrite(!latch_up ? ASSERT_UP : ASSERT_DOWN, LOW);
+      return;
+    } else if (setheight) {
+      if (height > target)
+        move_table_down();
+      else
+        move_table_up();
+      return;
+    }
   } else {
     //hit target
     digitalWrite(ASSERT_UP, LOW);
     digitalWrite(ASSERT_DOWN, LOW);
     latch_up = false;
     latch_down = false;
+    setheight = false;
     Serial.print("Hit target ");
     Serial.println(target);
     return;
   }
 }
 
+long lastPublish = 0;
+byte lastHeight = 0;
+
+void publishHeight() {
+    long now = millis();
+    if (lastHeight != height && now - lastPublish > 5000)
+    {
+        lastPublish = now;
+        lastHeight = height;
+        mqttClient.publish((MQTT_TOPIC + "height").c_str(), convertToChar(height));
+    }
+}
 
 void loop() {
   // sets global height and last_signal from logicdata serial
@@ -210,31 +301,34 @@ void loop() {
   }
   mqttClient.loop();
 
-  for(uint8_t i=0; i < ARRAY_SIZE(btn_pins); ++i) {
-    int btn_state = digitalRead(btn_pins[i]);
-    if((btn_state == btn_pressed_state) != btn_last_state[i] && millis() - debounce[i] > debounce_time) {
-      //change state
-      btn_last_state[i] = (btn_state == btn_pressed_state);
-      debounce[i] = millis();
-      last_signal = debounce[i];
+  if (!setheight) {
+    for(uint8_t i=0; i < ARRAY_SIZE(btn_pins); ++i) {
+      int btn_state = digitalRead(btn_pins[i]);
+      if((btn_state == btn_pressed_state) != btn_last_state[i] && millis() - debounce[i] > debounce_time) {
+        //change state
+        btn_last_state[i] = (btn_state == btn_pressed_state);
+        debounce[i] = millis();
+        last_signal = debounce[i];
 
-      if(btn_last_state[i]) {
-        if(millis() - btn_last_on[i] < double_time) {
-          //double press
-          Serial.print("double press ");
-          Serial.println(i == 0 ? "up" : "down");
-          mqttClient.publish((MQTT_TOPIC + "button").c_str(), i == 0 ? "double up" : "double down");
-          transitionState(i == 0 ? UpDouble : DownDouble);
-        } else {
-          btn_last_on[i] = debounce[i];
-          //single press
-          Serial.print("single press ");
-          Serial.println(i == 0 ? "up" : "down");
-          mqttClient.publish((MQTT_TOPIC + "button").c_str(), i == 0 ? "single up" : "single down");
-          transitionState(i == 0 ? UpSingle : DownSingle);
-        }
-      }// endif pressed
+        if(btn_last_state[i]) {
+          if(millis() - btn_last_on[i] < double_time) {
+            //double press
+            Serial.print("double press ");
+            Serial.println(i == 0 ? "up" : "down");
+            mqttClient.publish((MQTT_TOPIC + "button").c_str(), i == 0 ? "double up" : "double down");
+            transitionState(i == 0 ? UpDouble : DownDouble);
+          } else {
+            btn_last_on[i] = debounce[i];
+            //single press
+            Serial.print("single press ");
+            Serial.println(i == 0 ? "up" : "down");
+            mqttClient.publish((MQTT_TOPIC + "button").c_str(), i == 0 ? "single up" : "single down");
+            transitionState(i == 0 ? UpSingle : DownSingle);
+          }
+        }// endif pressed
+      }
     }
   }
   move();
+  publishHeight();
 }
