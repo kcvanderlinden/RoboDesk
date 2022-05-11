@@ -1,1 +1,6 @@
 .pio
+
+# Private Files
+Credentials.h
+Wificonfig.h
+pins.h

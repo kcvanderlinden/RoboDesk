@@ -1,4 +1,4 @@
-#include <pins.h>
+#include <pins.h> // rename pins.h.example and adjust pins
 #include <LogicData.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
