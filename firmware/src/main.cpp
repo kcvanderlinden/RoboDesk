@@ -40,6 +40,7 @@ uint8_t maxHeight = 128;
 uint8_t minHeight = 62;
 bool setheight = false;
 bool active = false;
+bool directionUp = false;
 
 uint8_t currentHeight;
 uint8_t targetHeight;
@@ -70,6 +71,7 @@ void setup_wifi() {
       WiFi.config(WIFI_IP, WIFI_DNS, WIFI_GATEWAY, WIFI_SUBNET);
     #endif
     WiFi.setAutoReconnect(true);
+    WiFi.hostname(HOSTNAME);
     WiFi.begin(WIFI_SSID, WIFI_PSK);
  
     while (WiFi.status() != WL_CONNECTED) {
@@ -226,12 +228,17 @@ void move_table_up() {
   // currentHeight is initially 0 before the first move
   if (currentHeight == 0 || isValidHeight(currentHeight)) {
     digitalWrite(ASSERT_UP, HIGH);
+    digitalWrite(ASSERT_DOWN, LOW);
+
+    //make sure to only log if there was a change
     if (active == false) {
       active = true;
       mqttClient.publish((MQTT_TOPIC + "active").c_str(), "true");
     }
-    mqttClient.publish((MQTT_TOPIC + "direction").c_str(), "up");
-    digitalWrite(ASSERT_DOWN, LOW);
+    if (directionUp == false) {
+      directionUp = true;
+      mqttClient.publish((MQTT_TOPIC + "direction").c_str(), "up");
+    }
   }
 }
 
@@ -239,12 +246,17 @@ void move_table_down() {
   // currentHeight is initially 0 before the first move
   if (currentHeight == 0 || isValidHeight(currentHeight)) {
     digitalWrite(ASSERT_DOWN, HIGH);
+    digitalWrite(ASSERT_UP, LOW);
+
+    //make sure to only log if there was a change
     if (active == false) {
       active = true;
       mqttClient.publish((MQTT_TOPIC + "active").c_str(), "true");
     }
-    mqttClient.publish((MQTT_TOPIC + "direction").c_str(), "down");
-    digitalWrite(ASSERT_UP, LOW);
+    if (directionUp == true) {
+      directionUp = false;
+      mqttClient.publish((MQTT_TOPIC + "direction").c_str(), "down");
+    }
   }
 }
 
@@ -304,6 +316,7 @@ void move_table() {
     latch_up = false;
     latch_down = false;
     setheight = false;
+    directionUp = false;
     Serial.print("Hit targetHeight ");
     Serial.println(targetHeight);
     return;
@@ -314,11 +327,14 @@ void initMQTT()
 {
   if (!mqttClient.connected()) {
       while (!mqttClient.connected()) {
-          if (mqttClient.connect("ESP8266Client", MQTT_USER, MQTT_PASS)) {
+          if (mqttClient.connect(HOSTNAME,
+              MQTT_USER, MQTT_PASS,
+              (MQTT_TOPIC + "lastConnected").c_str(),
+              0,
+              true,
+              __DATE__ " " __TIME__)) {
             mqttClient.subscribe((MQTT_TOPIC + "set").c_str());
             mqttClient.subscribe((MQTT_TOPIC + "cmd").c_str());
-
-            mqttClient.publish((MQTT_TOPIC + "state").c_str(), "connected");
           }
           delay(100);
       }
