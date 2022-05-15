@@ -3,8 +3,16 @@ Read LOGICDATA protocol to control height of a powered sit/stand desk.
 
 LOGICDATA protocol decoding from [phord's RoboDesk](https://github.com/phord/RoboDesk/tree/LogicData)
 
-## Current features:
+# Setup
+Make sure to rename all *.example files and adjust variables, as of now we have:
+* firmware/platformio.ini.example
+* firmware/src/Credentials.h.example
+* firmware/src/pins.h.example
+* firmware/src/Wificonfig.h.example
+
+## Features:
 * Double tap a direction to go to a hardcoded target height
+* Leverage MQTT to get / set height
 
 ## Files:
 * `firmware`: platformio code for the d1 mini

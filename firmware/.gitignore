@@ -1,6 +1,7 @@
 .pio
 
-# Private Files
+# Private Files containing secrets
+platformio.ini
 Credentials.h
 Wificonfig.h
 pins.h
