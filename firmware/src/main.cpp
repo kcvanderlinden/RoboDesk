@@ -4,6 +4,7 @@
 #include <PubSubClient.h>
 #include <ArduinoOTA.h>
 #include <Credentials.h> // rename Credential.h.example and adjust variables
+#include <Logging.h>
 
 #define ARRAY_SIZE(array) (sizeof(array) / sizeof(array[0]))
 
@@ -37,11 +38,12 @@ void IRAM_ATTR logicDataPin_ISR() {
 
 uint8_t highTarget = 125;
 uint8_t lowTarget = 88;
-uint8_t maxHeight = 128;
-uint8_t minHeight = 62;
+uint8_t maxHeight = 128; //maxHeight table = 128, but you may set a custom min
+uint8_t minHeight = 78; //minHeight table = 62, but you may set a custom min
 bool setheight = false;
 enum Directions { UP, DOWN, STOPPED };
 Directions direction = STOPPED;
+Directions last_direction = STOPPED;
 bool mqttLog = false;
 
 uint8_t currentHeight;
@@ -59,11 +61,18 @@ int convertToInt (char* value, int length) {
   return atoi(value);
 }
 
-bool isValidHeight(int checkHeight) {
+bool isValidHeight(int checkHeight, Directions direction) {
   if (checkHeight >= minHeight && checkHeight <= maxHeight)
     return true;
-  else
-    return false;
+  else {
+    // allow to move in the direction away from min/max
+    if (direction == UP && checkHeight <= maxHeight)
+      return true;
+    else if (direction == DOWN && checkHeight >= minHeight)
+      return true;
+    else
+      return false;
+  }
 }
 
 void log(const char* message) {
@@ -135,8 +144,9 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
   log("");
 
   if ((String) topic == MQTT_TOPIC + "set") {
+    Log.Debug("MQTT: Inside set topic" CR);
     int height_in = convertToInt((char* )message, length);
-    if (isValidHeight(height_in)) {
+    if (isValidHeight(height_in, STOPPED)) {
       targetHeight = height_in;
       setheight = true;
     } else {
@@ -151,6 +161,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
   }
 
   if ((String) topic == MQTT_TOPIC + "cmd") {
+    Log.Debug("MQTT: Inside cmd topic" CR);
     if (messageTemp == "debug") {
       if (mqttLog == false)
         mqttLog = true;
@@ -208,6 +219,7 @@ void setup() {
   pinMode(ASSERT_DOWN, OUTPUT);
 
   Serial.begin(115200);
+  Log.Init(LOG_LEVEL_DEBUG, 115200L);
 
   setup_wifi();
   setup_OTA();
@@ -248,9 +260,18 @@ void check_display() {
     last_signal = millis();
 }
 
+void stop_table() {
+    digitalWrite(ASSERT_UP, LOW);
+    digitalWrite(ASSERT_DOWN, LOW);
+    if (direction == UP || direction == DOWN) {
+      mqttClient.publish((MQTT_TOPIC + "state").c_str(), "stopped");
+      direction = STOPPED;
+    }
+}
+
 void move_table_up() {
   // currentHeight is initially 0 before the first move
-  if (currentHeight == 0 || isValidHeight(currentHeight)) {
+  if (currentHeight == 0 || isValidHeight(currentHeight, UP)) {
     digitalWrite(ASSERT_UP, HIGH);
     digitalWrite(ASSERT_DOWN, LOW);
 
@@ -258,13 +279,16 @@ void move_table_up() {
     if (direction == DOWN || direction == STOPPED) {
       mqttClient.publish((MQTT_TOPIC + "state").c_str(), "up");
       direction = UP;
+      last_direction = DOWN;
     }
+  } else if (!isValidHeight(currentHeight, UP)) {
+    stop_table();
   }
 }
 
 void move_table_down() {
   // currentHeight is initially 0 before the first move
-  if (currentHeight == 0 || isValidHeight(currentHeight)) {
+  if (currentHeight == 0 || isValidHeight(currentHeight, STOPPED)) {
     digitalWrite(ASSERT_DOWN, HIGH);
     digitalWrite(ASSERT_UP, LOW);
 
@@ -272,7 +296,10 @@ void move_table_down() {
     if (direction == UP || direction == STOPPED) {
       mqttClient.publish((MQTT_TOPIC + "state").c_str(), "down");
       direction = DOWN;
+      last_direction = DOWN;
     }
+  } else if (!isValidHeight(currentHeight, DOWN)) {
+    stop_table();
   }
 }
 
@@ -280,6 +307,7 @@ void move_table() {
   //btn_last_state has current buttons pressed
   if(btn_last_state[0] && btn_last_state[1]) {
     //both buttons pressed, do nothing
+    //TODO: Save position to EEPROM like https://github.com/talsalmona/RoboDesk/blob/master/RoboDesk.ino
     log("Both buttons pressed");
   } else if(btn_last_state[0]) {
     move_table_up();
@@ -288,13 +316,8 @@ void move_table() {
     move_table_down();
     return;
   } else if (!latch_up && !latch_down && !setheight) {
-    //if not latch, do nothing
-    digitalWrite(ASSERT_UP, LOW);
-    digitalWrite(ASSERT_DOWN, LOW);
-    if (direction == UP || direction == DOWN) {
-      mqttClient.publish((MQTT_TOPIC + "state").c_str(), "stopped");
-      direction = STOPPED;
-    }
+    //if not latched, do nothing
+    stop_table();
     return;
   }
 
@@ -333,6 +356,7 @@ void move_table() {
     latch_down = false;
     setheight = false;
     direction = STOPPED;
+    last_direction = STOPPED;
     Serial.print("Hit targetHeight ");
     Serial.println(targetHeight);
     return;
