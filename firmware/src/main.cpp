@@ -25,6 +25,7 @@ uint32_t last_signal = 0;
 uint32_t signal_giveup_time = 2000;
 
 
+const char* versionLine = "Robodesk v2.5  build: " __DATE__ " " __TIME__;
 LogicData ld(-1);
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -34,13 +35,14 @@ void IRAM_ATTR logicDataPin_ISR() {
   ld.PinChange(HIGH == digitalRead(LOGICDATA_RX));
 }
 
-uint8_t highTarget = 110;
-uint8_t lowTarget = 80;
+uint8_t highTarget = 125;
+uint8_t lowTarget = 88;
 uint8_t maxHeight = 128;
 uint8_t minHeight = 62;
 bool setheight = false;
-bool active = false;
-bool directionUp = false;
+enum Directions { UP, DOWN, STOPPED };
+Directions direction = STOPPED;
+bool mqttLog = false;
 
 uint8_t currentHeight;
 uint8_t targetHeight;
@@ -64,6 +66,43 @@ bool isValidHeight(int checkHeight) {
     return false;
 }
 
+void log(const char* message) {
+  Serial.println(message);
+
+  // if (mqttLog == true) {
+  //   mqttClient.publish((MQTT_TOPIC + "log").c_str(), message);
+  // }
+}
+
+enum Actions { UpSingle, UpDouble, DownSingle, DownDouble };
+bool latch_up = false;
+bool latch_down = false;
+
+void transitionState(enum Actions action) {
+  switch(action) {
+    case UpSingle:
+    case DownSingle:
+      if (latch_up || latch_down) {
+        log("Breaking latches");
+        latch_up = false;
+        latch_down = false;
+      }
+      break;
+    case UpDouble:
+      latch_up = true;
+      targetHeight = highTarget;
+      Serial.print("Latching UP ");
+      Serial.println(targetHeight);
+      break;
+    case DownDouble:
+      latch_down = true;
+      targetHeight = lowTarget;
+      Serial.print("Latching Down ");
+      Serial.println(targetHeight);
+      break;
+  }
+}
+
 void setup_wifi() {
     WiFi.mode(WIFI_STA);
     WiFi.persistent(false);
@@ -84,7 +123,7 @@ void setup_wifi() {
 }
 
 void mqttCallback(char* topic, byte* message, unsigned int length) {
-  Serial.print("Message arrived on topic: ");
+  Serial.print("Message arrived on topic: " CR);
   Serial.print(topic);
   Serial.print(". Message: ");
   String messageTemp;
@@ -93,7 +132,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     Serial.print((char)message[i]);
     messageTemp += (char)message[i];
   }
-  Serial.println();
+  log("");
 
   if ((String) topic == MQTT_TOPIC + "set") {
     int height_in = convertToInt((char* )message, length);
@@ -103,12 +142,26 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
     } else {
       char buffer[40];
       sprintf(buffer, "Invalid height! [min: %d, max: %d]", minHeight, maxHeight);
-      Serial.println(buffer);
+      log(buffer);
     }
     
     Serial.println("------");
     Serial.print("Current height: ");
     Serial.println(currentHeight);
+  }
+
+  if ((String) topic == MQTT_TOPIC + "cmd") {
+    if (messageTemp == "debug") {
+      if (mqttLog == false)
+        mqttLog = true;
+      else
+        mqttLog = false;
+      log(mqttLog ? "Activated MQTT Logging" : "Deactivated MQTT Logging");
+    } else if (messageTemp == "up") {
+      transitionState(UpDouble);
+    } else if (messageTemp == "down") {
+      transitionState(DownDouble);
+    }
   }
 }
 
@@ -124,7 +177,7 @@ void setup_OTA() {
     Serial.println("Start updating " + type);
   });
   ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
+    log("\nEnd");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
@@ -132,15 +185,15 @@ void setup_OTA() {
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR)
-      Serial.println("Auth Failed");
+      log("Auth Failed");
     else if (error == OTA_BEGIN_ERROR)
-      Serial.println("Begin Failed");
+      log("Begin Failed");
     else if (error == OTA_CONNECT_ERROR)
-      Serial.println("Connect Failed");
+      log("Connect Failed");
     else if (error == OTA_RECEIVE_ERROR)
-      Serial.println("Receive Failed");
+      log("Receive Failed");
     else if (error == OTA_END_ERROR)
-      Serial.println("End Failed");
+      log("End Failed");
   });
   ArduinoOTA.begin();
 }
@@ -166,7 +219,7 @@ void setup() {
 
   ld.Begin();
 
-  Serial.println("Robodesk v2.5  build: " __DATE__ " " __TIME__);
+  log(versionLine);
 }
 
 // Record last time the display changed
@@ -179,6 +232,7 @@ void check_display() {
     uint32_t now = millis();
     sprintf(buf, "%6ums %s: %s", now - prev, ld.MsgType(msg), ld.Decode(msg));
     Serial.println(buf);
+    log(msg);
     prev=now;
   }
 
@@ -194,36 +248,6 @@ void check_display() {
     last_signal = millis();
 }
 
-
-enum Actions { UpSingle, UpDouble, DownSingle, DownDouble };
-bool latch_up = false;
-bool latch_down = false;
-
-void transitionState(enum Actions action) {
-  switch(action) {
-    case UpSingle:
-    case DownSingle:
-      if (latch_up || latch_down) {
-        Serial.println("Breaking latches");
-        latch_up = false;
-        latch_down = false;
-      }
-      break;
-    case UpDouble:
-      latch_up = true;
-      targetHeight = highTarget;
-      Serial.print("Latching UP ");
-      Serial.println(targetHeight);
-      break;
-    case DownDouble:
-      latch_down = true;
-      targetHeight = lowTarget;
-      Serial.print("Latching Down ");
-      Serial.println(targetHeight);
-      break;
-  }
-}
-
 void move_table_up() {
   // currentHeight is initially 0 before the first move
   if (currentHeight == 0 || isValidHeight(currentHeight)) {
@@ -231,13 +255,9 @@ void move_table_up() {
     digitalWrite(ASSERT_DOWN, LOW);
 
     //make sure to only log if there was a change
-    if (active == false) {
-      active = true;
-      mqttClient.publish((MQTT_TOPIC + "active").c_str(), "true");
-    }
-    if (directionUp == false) {
-      directionUp = true;
-      mqttClient.publish((MQTT_TOPIC + "direction").c_str(), "up");
+    if (direction == DOWN || direction == STOPPED) {
+      mqttClient.publish((MQTT_TOPIC + "state").c_str(), "up");
+      direction = UP;
     }
   }
 }
@@ -249,13 +269,9 @@ void move_table_down() {
     digitalWrite(ASSERT_UP, LOW);
 
     //make sure to only log if there was a change
-    if (active == false) {
-      active = true;
-      mqttClient.publish((MQTT_TOPIC + "active").c_str(), "true");
-    }
-    if (directionUp == true) {
-      directionUp = false;
-      mqttClient.publish((MQTT_TOPIC + "direction").c_str(), "down");
+    if (direction == UP || direction == STOPPED) {
+      mqttClient.publish((MQTT_TOPIC + "state").c_str(), "down");
+      direction = DOWN;
     }
   }
 }
@@ -264,7 +280,7 @@ void move_table() {
   //btn_last_state has current buttons pressed
   if(btn_last_state[0] && btn_last_state[1]) {
     //both buttons pressed, do nothing
-    Serial.println("Both buttons pressed");
+    log("Both buttons pressed");
   } else if(btn_last_state[0]) {
     move_table_up();
     return;
@@ -275,20 +291,20 @@ void move_table() {
     //if not latch, do nothing
     digitalWrite(ASSERT_UP, LOW);
     digitalWrite(ASSERT_DOWN, LOW);
-    if (active == true) {
-      mqttClient.publish((MQTT_TOPIC + "active").c_str(), "false");
-      active = false;
+    if (direction == UP || direction == DOWN) {
+      mqttClient.publish((MQTT_TOPIC + "state").c_str(), "stopped");
+      direction = STOPPED;
     }
     return;
   }
 
   if (latch_up && latch_down) {
-    Serial.println("Latch up and latch down set, this is an issue");
+    log("Latch up and latch down set, this is an issue");
     while(true) ;
   }
 
   if((millis() - last_signal > signal_giveup_time) && !setheight) {
-    Serial.println("Haven't seen input in a while, turning everything off for safety");
+    log("Haven't seen input in a while, turning everything off for safety");
     digitalWrite(ASSERT_UP, LOW);
     digitalWrite(ASSERT_DOWN, LOW);
     latch_up = false;
@@ -316,15 +332,14 @@ void move_table() {
     latch_up = false;
     latch_down = false;
     setheight = false;
-    directionUp = false;
+    direction = STOPPED;
     Serial.print("Hit targetHeight ");
     Serial.println(targetHeight);
     return;
   }
 }
 
-void initMQTT()
-{
+void initMQTT() {
   if (!mqttClient.connected()) {
       while (!mqttClient.connected()) {
           if (mqttClient.connect(HOSTNAME,
@@ -332,7 +347,7 @@ void initMQTT()
               (MQTT_TOPIC + "lastConnected").c_str(),
               0,
               true,
-              __DATE__ " " __TIME__)) {
+              versionLine)) {
             mqttClient.subscribe((MQTT_TOPIC + "set").c_str());
             mqttClient.subscribe((MQTT_TOPIC + "cmd").c_str());
           }

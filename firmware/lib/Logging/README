@@ -1,0 +1,75 @@
+# Logging helper
+Logging is a helper class to output informations over
+RS232. If you know log4j or log4net, this logging class
+is more or less similar ;-)  
+Different loglevels can be used to extend or reduce output
+All methods are able to handle any number of output parameters.
+All methods print out a formated string (like printf).  
+To reduce output and program size, reduce loglevel.
+
+Output format string can contain below wildcards. Every wildcard
+must be start with percent sign (`%`)
+
+**Depending on loglevel, source code is excluded from compile !**
+
+## Wildcards
+* `%s`	replace with an string (`char*`)
+* `%c`	replace with an **character**
+* `%d`	replace with an **integer** value
+* `%l`	replace with an **long** value
+* `%x`	replace and *convert integer* value into **hex**
+* `%X`	like `%x` but *combine* with **0x**123AB
+* `%b`	replace and *convert integer* value into **binary**
+* `%B`	like `%x` but *combine* with **0b**10100011
+* `%t`	replace and *convert boolean* value into `"t"` or `"f"`
+* `%T`	like `%t` but *convert* into `"true"` or `"false"`
+
+## Loglevels
+| key | value              | description          |
+| --- | ------------------ | -------------------- |
+| 0   | LOG_LEVEL_NOOUTPUT | no output            |
+| 1   | LOG_LEVEL_ERROR    | only error           |
+| 2   | LOG_LEVEL_INFO     | errors & info        |
+| 3   | LOG_LEVEL_DEBUG    | errors, info & debug |
+| 4   | LOG_LEVEL_VERBOSE  | all                  |
+
+## Examples
+
+```cpp
+#define LOGLEVEL LOG_LEVEL_DEBUG
+
+int myInt1, myInt2;
+long myLong1, myLong2;
+bool myBool1, myBool2;
+char* myString = "this is a string";
+
+void setup() {
+    Log.Init(LOGLEVEL, 38400L);
+    Log.Info(CR"******************************************"CR);
+    Log.Info("My favorite output stuff in future :-)"CR);
+    Log.Info("******************************************"CR);
+    myInt1 = 232;
+    myInt2 = 32199;
+    myLong1 = 99403020;
+    myLong2 = 45021;
+    myBool1 = true;
+    myBool2 = !myBool1;
+}
+
+void loop() {
+    Log.Info("Display my integers myInt1 %d, myInt2 %d"CR, myInt1, myInt2);
+    Log.Info("Display as hex myInt1=%x, myInt1=%X"CR, myInt1, myInt1);
+    Log.Info("Display as hex myInt2=%x, myInt2=%X"CR, myInt2, myInt2);
+    Log.Info("Display as binary myInt1=%b, myInt1=%B"CR, myInt1, myInt1);
+    Log.Info("Display as binary myInt2=%b, myInt2=%B"CR, myInt2, myInt2);
+    Log.Info("Display my longs myLong1 %l, myLong2=%l"CR, myLong1, myLong2);
+    Log.Info("Display my bool myBool1=%t, myBool2=%T"CR, myBool1, myBool2);
+    Log.Info("Output: %s"CR, myString);
+    Log.Error("is this an real error? %T"CR, myBool2);
+    Log.Debug("%d, %d, %l, %l, %t, %T"CR, myInt1, myInt2,
+              myLong1, myLong2,
+              myBool1, myBool2);
+    Log.Info(CR"have fun with this Log"CR);
+    delay(5000);
+}
+```
