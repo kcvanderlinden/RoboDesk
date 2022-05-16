@@ -128,29 +128,26 @@ void check_display() {
 }
 
 enum Actions { UpSingle, UpDouble, DownSingle, DownDouble };
-bool latch_up = false;
-bool latch_down = false;
 
 void transitionState(enum Actions action) {
   switch(action) {
     case UpSingle:
     case DownSingle:
-      if (latch_up || latch_down) {
-        log("Breaking latches");
-        latch_up = false;
-        latch_down = false;
+      if (setHeight) {
+        log("Breaking setHeight");
+        setHeight = false;
       }
       break;
     case UpDouble:
-      latch_up = true;
+      setHeight = true;
       targetHeight = highTarget;
-      Serial.print("Latching UP ");
+      Serial.print("Setting high target ");
       Serial.println(targetHeight);
       break;
     case DownDouble:
-      latch_down = true;
+      setHeight = true;
       targetHeight = lowTarget;
-      Serial.print("Latching Down ");
+      Serial.print("Setting low target ");
       Serial.println(targetHeight);
       break;
   }
@@ -161,8 +158,6 @@ void transitionState(enum Actions action) {
 void stop_table() {
     digitalWrite(ASSERT_UP, LOW);
     digitalWrite(ASSERT_DOWN, LOW);
-    latch_up = false;
-    latch_down = false;
     targetHeight = currentHeight;
     setHeight = false;
     last_direction = STOPPED;
@@ -205,15 +200,9 @@ void move() {
     //right button pressed
     move_table(DOWN);
     return;
-  } else if (!latch_up && !latch_down && !setHeight) {
-    //if not latched, do nothing
+  } else if (!setHeight) {
     stop_table();
     return;
-  }
-
-  if (latch_up && latch_down) {
-    log("Latch up and latch down set, this is an issue");
-    while(true) ;
   }
 
   if((millis() - last_signal > signal_giveup_time) && !setHeight) {
@@ -223,12 +212,7 @@ void move() {
   }
 
   if(currentHeight != targetHeight) {
-    if (latch_up || latch_down) {
-      //should be moving
-      latch_up ? move_table(UP) : move_table(DOWN);
-      digitalWrite(!latch_up ? ASSERT_UP : ASSERT_DOWN, LOW);
-      return;
-    } else if (setHeight) {
+    if (setHeight) {
       if (currentHeight > targetHeight)
         move_table(DOWN);
       else
