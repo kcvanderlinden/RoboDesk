@@ -1,3 +1,5 @@
+// Inspired by https://github.com/dhylands/Arduino-logging-library
+
 # Logging helper
 Logging is a helper class to output informations over
 RS232. If you know log4j or log4net, this logging class
@@ -13,10 +15,11 @@ must be start with percent sign (`%`)
 **Depending on loglevel, source code is excluded from compile !**
 
 ## Wildcards
-* `%s`	replace with an string (`char*`)
-* `%c`	replace with an **character**
+* `%s`	replace with a string (`char*`)
+* `%c`	replace with a **character**
+* `%C`	replace with a **character** and cast to (`char`)
 * `%d`	replace with an **integer** value
-* `%l`	replace with an **long** value
+* `%l`	replace with a **long** value
 * `%x`	replace and *convert integer* value into **hex**
 * `%X`	like `%x` but *combine* with **0x**123AB
 * `%b`	replace and *convert integer* value into **binary**
