@@ -88,14 +88,6 @@ bool isValidHeight(int checkHeight, Directions direction = STOPPED) {
   }
 }
 
-void log(const char* message) {
-  Serial.println(message);
-
-  // if (mqttLog == true) {
-  //   mqttClient.publish((MQTT_TOPIC + "log").c_str(), message);
-  // }
-}
-
 #pragma endregion
 
 /**
@@ -110,7 +102,7 @@ void check_display() {
   if (msg) {
     uint32_t now = millis();
     sprintf(buf, "%6ums %s: %s", now - prev, ld.MsgType(msg), ld.Decode(msg));
-    Serial.println(buf);
+    Log.Debug("%s" CR, buf);
     log(msg);
     prev=now;
   }
@@ -134,21 +126,19 @@ void transitionState(enum Actions action) {
     case UpSingle:
     case DownSingle:
       if (setHeight) {
-        log("Breaking setHeight");
+        Log.Info("Breaking setHeight" CR);
         setHeight = false;
       }
       break;
     case UpDouble:
       setHeight = true;
       targetHeight = highTarget;
-      Serial.print("Setting high target ");
-      Serial.println(targetHeight);
+        Log.Info("Setting high target %d" CR, targetHeight);
       break;
     case DownDouble:
       setHeight = true;
       targetHeight = lowTarget;
-      Serial.print("Setting low target ");
-      Serial.println(targetHeight);
+        Log.Info("Setting low target %d" CR, targetHeight);
       break;
   }
 }
@@ -191,7 +181,7 @@ void move() {
   if(btn_last_state[0] && btn_last_state[1]) {
     //both buttons pressed, do nothing
     //TODO: Save position to EEPROM like https://github.com/talsalmona/RoboDesk/blob/master/RoboDesk.ino
-    log("Both buttons pressed");
+    Log.Debug("Both buttons pressed" CR);
   } else if(btn_last_state[0]) {
     //left button pressed
     move_table(UP);
@@ -206,7 +196,7 @@ void move() {
   }
 
   if((millis() - last_signal > signal_giveup_time) && !setHeight) {
-    log("Haven't seen input in a while, turning everything off for safety");
+    Log.Error("Haven't seen input in a while, turning everything off for safety" CR);
     stop_table();
     while(true) ;
   }
@@ -220,8 +210,7 @@ void move() {
       return;
     }
   } else {
-    Serial.print("Hit targetHeight ");
-    Serial.println(targetHeight);
+    Log.Info("Hit targetHeight %d" CR, targetHeight);
     stop_table();
     return;
   }
@@ -238,17 +227,17 @@ void mqtt_callCmd(String message) {
         mqttLog = true;
       else
         mqttLog = false;
-      log(mqttLog ? "Activated MQTT Logging" : "Deactivated MQTT Logging");
+      Log.Debug("%s MQTT Logging" CR, mqttLog ? "Activated" : "Deactivated");
     } else if (message == "up") {
         setHeight = true;
         targetHeight = highTarget;
     } else if (message == "down") {
         setHeight = true;
         targetHeight = lowTarget;
-    } else if (message == "test") {
-        Log.Debug("MQTT: Current height: %d" CR, currentHeight);
     } else if (message == "stop") {
         stop_table();
+    } else if (message == "ping") {
+        Log.Debug("MQTT: pong. Current height: %d" CR, currentHeight);
     }
 }
 
@@ -261,25 +250,22 @@ void mqtt_callSet(byte* message, int length) {
     } else {
       char buffer[40];
       sprintf(buffer, "Invalid height! [min: %d, max: %d]", minHeight, maxHeight);
-      log(buffer);
+      Log.Error("%s" CR, buffer);
     }
     
-    Serial.println("------");
-    Serial.print("Current height: ");
-    Serial.println(currentHeight);
+    Log.Info("------" CR);
+    Log.Info("Current height: %d" CR, currentHeight);
 }
 
 void mqttCallback(char* topic, byte* message, unsigned int length) {
-  Serial.print("Message arrived on topic: " CR);
-  Serial.print(topic);
-  Serial.print(". Message: ");
+  Log.Debug("Message arrived on topic: %s. Message [%d]: ", topic, length);
   String messageTemp;
   
   for (unsigned int i = 0; i < length; i++) {
-    Serial.print((char)message[i]);
+    Log.Debug("%C", message[i]);
     messageTemp += (char)message[i];
   }
-  log("");
+  Log.Debug(CR);
 
   if ((String) topic == MQTT_TOPIC + "set") {
     mqtt_callSet(message, length);
@@ -307,10 +293,7 @@ void setup_wifi() {
     while (WiFi.status() != WL_CONNECTED) {
         delay(100);
     }
-
-    Serial.println("---------");
-    Serial.print("Wifi connected with IP: ");
-    Serial.println(WiFi.localIP());
+    Log.Info("WiFi: Connected! IP: %s" CR, (WiFi.localIP().toString().c_str()));
 }
 
 void setup_OTA() {
@@ -322,28 +305,33 @@ void setup_OTA() {
       type = "filesystem";
 
     // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-    Serial.println("Start updating " + type);
+    Log.Info("Start updating %s" CR, type);
   });
   ArduinoOTA.onEnd([]() {
-    log("\nEnd");
+    Log.Info(CR "End" CR);
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    Log.Info("Progress: %d%%\n", (progress / (total / 100)));
   });
   ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
+    Log.Error("Error[%d]: ", error);
     if (error == OTA_AUTH_ERROR)
-      log("Auth Failed");
+      Log.Error("Auth Failed" CR);
     else if (error == OTA_BEGIN_ERROR)
-      log("Begin Failed");
+      Log.Error("Begin Failed" CR);
     else if (error == OTA_CONNECT_ERROR)
-      log("Connect Failed");
+      Log.Error("Connect Failed" CR);
     else if (error == OTA_RECEIVE_ERROR)
-      log("Receive Failed");
+      Log.Error("Receive Failed" CR);
     else if (error == OTA_END_ERROR)
-      log("End Failed");
+      Log.Error("End Failed" CR);
   });
   ArduinoOTA.begin();
+}
+
+void setup_mqtt() {
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
 }
 
 void initMQTT() {
@@ -380,6 +368,8 @@ void mqtt_publishHeight() {
 
 void setup() {
 
+  // BTN_UP/DOWN are the physical buttons
+  // ASSERT_UP/DOWN are the connections to the motor
   pinMode(BTN_UP, INPUT);
   pinMode(BTN_DOWN, INPUT);
   pinMode(LOGICDATA_RX, INPUT);
@@ -387,20 +377,20 @@ void setup() {
   pinMode(ASSERT_UP, OUTPUT);
   pinMode(ASSERT_DOWN, OUTPUT);
 
-  Serial.begin(115200);
   Log.Init(LOG_LEVEL_DEBUG, 115200L);
+  Log.Info(CR "---------" CR);
+  Log.Info("%s" CR, versionLine);
 
   setup_wifi();
   setup_OTA();
-  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
-  mqttClient.setCallback(mqttCallback);
+  setup_mqtt();
 
   logicDataPin_ISR();
   attachInterrupt(digitalPinToInterrupt(LOGICDATA_RX), logicDataPin_ISR, CHANGE);
 
   ld.Begin();
 
-  log(versionLine);
+  Log.Info("---------" CR);
 
   // we use this just to get an initial height on startup (otherwise it's 0)
   move_table(UP);
@@ -413,7 +403,8 @@ void loop() {
   ArduinoOTA.handle();
   initMQTT();
 
-  if (!setHeight) {
+  // check the buttons
+  // if (!setHeight) {
     for(uint8_t i=0; i < ARRAY_SIZE(btn_pins); ++i) {
       int btn_state = digitalRead(btn_pins[i]);
       if((btn_state == btn_pressed_state) != btn_last_state[i] && millis() - debounce[i] > debounce_time) {
@@ -425,22 +416,20 @@ void loop() {
         if(btn_last_state[i]) {
           if(millis() - btn_last_on[i] < double_time) {
             //double press
-            Serial.print("double press ");
-            Serial.println(i == 0 ? "up" : "down");
+            Log.Info("double press %s" CR, i == 0 ? "up" : "down");
             mqttClient.publish((MQTT_TOPIC + "button").c_str(), i == 0 ? "double up" : "double down");
             transitionState(i == 0 ? UpDouble : DownDouble);
           } else {
             btn_last_on[i] = debounce[i];
             //single press
-            Serial.print("single press ");
-            Serial.println(i == 0 ? "up" : "down");
+            Log.Info("single press %s" CR, i == 0 ? "up" : "down");
             mqttClient.publish((MQTT_TOPIC + "button").c_str(), i == 0 ? "single up" : "single down");
             transitionState(i == 0 ? UpSingle : DownSingle);
           }
         }// endif pressed
       }
     }
-  }
+  // }
 
   move();
   mqtt_publishHeight();

@@ -1,3 +1,5 @@
+// Inspired by https://github.com/dhylands/Arduino-logging-library
+
 #include <Logging.h>
 
 void Logging::Init(int level, long baud){
@@ -91,9 +93,12 @@ void Logging::print(const char *format, va_list args) {
 				_printer->print(va_arg( args, long ),DEC);
 				continue;
 			}
-
             if( *format == 'c' ) {
 				_printer->print(va_arg( args, int ));
+				continue;
+			}
+            if( *format == 'C' ) {
+				_printer->print((char)va_arg( args, int ));
 				continue;
 			}
             if( *format == 't' ) {
