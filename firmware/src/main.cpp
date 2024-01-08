@@ -5,6 +5,7 @@
 #include <ArduinoOTA.h>
 #include <Credentials.h> // rename Credential.h.example and adjust variables
 #include <Logging.h>
+#include <Wificonfig.h>
 
 uint8_t highTarget = 125;
 uint8_t lowTarget = 88;
@@ -340,7 +341,7 @@ void setup_wifi() {
       WiFi.config(WIFI_IP, WIFI_DNS, WIFI_GATEWAY, WIFI_SUBNET);
     #endif
     WiFi.setAutoReconnect(true);
-    WiFi.hostname(HOSTNAME);
+    WiFi.hostname("Robodesk");
     WiFi.begin(WIFI_SSID, WIFI_PSK);
  
     while (WiFi.status() != WL_CONNECTED) {
@@ -390,7 +391,7 @@ void setup_mqtt() {
 void init_mqtt() {
   if (!mqttClient.connected()) {
       while (!mqttClient.connected()) {
-          if (mqttClient.connect(HOSTNAME,
+          if (mqttClient.connect("Robodesk",
               MQTT_USER, MQTT_PASS,
               (MQTT_TOPIC + "lastConnected").c_str(),
               0,
